@@ -17,7 +17,7 @@ Built as a hands-on project to learn RAG architecture from the ground up not a t
 
 ## How It Works
 
-1. **Ingestion** - user uploads a PDF; it's parsed page by page.
+1. **Ingestion** - user uploads a PDF -> it's parsed page by page.
 2. **Chunking** - pages are merged into one continuous string before splitting (not split page-by-page), so chunk overlap works correctly even across page boundaries. Split into ~500-character chunks with 150-character overlap. Each chunk retains metadata on which page(s) it spans.
 3. **Embedding** - each chunk is converted into a vector via Gemini's embedding model, batched (40 chunks/batch with delay) to respect free-tier rate limits.
 4. **Storage** - vectors are stored in a local FAISS index.
@@ -65,9 +65,9 @@ While building a retrieval evaluation set, I noticed something odd inspecting ra
 Built a 15-question ground-truth eval set (chunk-ID level, not just answer-level) against a technical PDF, covering direct lookups, multi-location synthesis questions, and deliberately out-of-scope questions to test hallucination resistance.
 
 **Results (k=3):**
-- Hit-rate@5: 0.82
-- Recall@5: 0.59
-- Precision@5: 0.36 (expected - ground truth often has 1-2 correct chunks per question against k=5 retrieved, naturally diluting precision; recall-protective wide retrieval is a deliberate tradeoff)
+- Hit-rate@3: 0.82
+- Recall@3: 0.59
+- Precision@3: 0.36 (expected - ground truth often has atleast correct chunks per question against k=3 retrieved, naturally diluting precision; recall-protective wide retrieval is a deliberate tradeoff)
 
 
 ## Known Limitations
