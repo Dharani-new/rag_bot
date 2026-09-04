@@ -6,7 +6,6 @@ Built as a hands-on project to learn RAG architecture from the ground up — not
 
 ## Demo
 
-*(Add a screenshot or short screen recording of the app here once deployed)*
 
 **Example Q&A** (tested on SRKR's B.Tech R23 Academic Regulations):
 - **Q:** "How many academic years does a student have to complete their B.Tech degree?"
