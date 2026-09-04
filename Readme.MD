@@ -17,12 +17,12 @@ Built as a hands-on project to learn RAG architecture from the ground up not a t
 
 ## How It Works
 
-1. **Ingestion** — user uploads a PDF; it's parsed page by page.
-2. **Chunking** — pages are merged into one continuous string before splitting (not split page-by-page), so chunk overlap works correctly even across page boundaries. Split into ~500-character chunks with 150-character overlap. Each chunk retains metadata on which page(s) it spans.
-3. **Embedding** — each chunk is converted into a vector via Gemini's embedding model, batched (40 chunks/batch with delay) to respect free-tier rate limits.
-4. **Storage** — vectors are stored in a local FAISS index.
-5. **Retrieval** — user's query is embedded and compared against all chunk vectors. A wide first pass (top-20) is retrieved cheaply via bi-encoder similarity, then a cross-encoder re-ranker (`ms-marco-MiniLM-L6-v2`) re-scores each (query, chunk) pair directly for higher precision. Final top-k (3 for specific questions, 10 for broad "summarize" requests) is kept after re-ranking.
-6. **Generation** — retrieved chunks are inserted into a prompt alongside the query, and Gemini generates an answer grounded in that context, with source chunks shown for transparency.
+1. **Ingestion** - user uploads a PDF; it's parsed page by page.
+2. **Chunking** - pages are merged into one continuous string before splitting (not split page-by-page), so chunk overlap works correctly even across page boundaries. Split into ~500-character chunks with 150-character overlap. Each chunk retains metadata on which page(s) it spans.
+3. **Embedding** - each chunk is converted into a vector via Gemini's embedding model, batched (40 chunks/batch with delay) to respect free-tier rate limits.
+4. **Storage** - vectors are stored in a local FAISS index.
+5. **Retrieval** - user's query is embedded and compared against all chunk vectors. A wide first pass (top-20) is retrieved cheaply via bi-encoder similarity, then a cross-encoder re-ranker (`ms-marco-MiniLM-L6-v2`) re-scores each (query, chunk) pair directly for higher precision. Final top-k (3 for specific questions, 10 for broad "summarize" requests) is kept after re-ranking.
+6. **Generation** - retrieved chunks are inserted into a prompt alongside the query, and Gemini generates an answer grounded in that context, with source chunks shown for transparency.
 
 ## Setup
 
@@ -48,15 +48,15 @@ streamlit run app.py
 
 - **Rate limiting:** Google's free-tier embedding API caps at 100 requests/minute. Solved with batched embedding (40 chunks/batch) and delays between batches, with progress saved after each batch to avoid losing work on failure.
 - **Model deprecation:** handled multiple mid-development API/model name changes (embedding model, chat model) by reading error messages and updating to current model identifiers.
-- **Query-type-aware retrieval:** broad "summarize" queries need more context than specific fact-lookup queries — implemented adaptive `k` and a separate summarization prompt to handle this distinction.
+- **Query-type-aware retrieval:** broad "summarize" queries need more context than specific fact-lookup queries - implemented adaptive `k` and a separate summarization prompt to handle this distinction.
 
 ## Debugging a Silent Chunking Bug
 
 While building a retrieval evaluation set, I noticed something odd inspecting raw chunk boundaries: consecutive chunks showed **zero character overlap** despite `chunk_overlap=50` being set. Investigation traced this to two compounding issues:
 
-1. **Overlap value too small relative to the text's natural split units.** `RecursiveCharacterTextSplitter` carries overlap back along natural boundaries (line/sentence), not raw characters. With overlap set to 50 and typical line lengths of 90–140 characters in this PDF, the splitter had no room to carry back a full unit — resulting in effectively zero overlap everywhere. Fixed by raising overlap to 150.
+1. **Overlap value too small relative to the text's natural split units.** `RecursiveCharacterTextSplitter` carries overlap back along natural boundaries (line/sentence), not raw characters. With overlap set to 50 and typical line lengths of 90–140 characters in this PDF, the splitter had no room to carry back a full unit - resulting in effectively zero overlap everywhere. Fixed by raising overlap to 150.
 
-2. **Page-independent splitting.** `PyPDFLoader` returns one `Document` per page, and `split_documents()` processes each page separately — meaning the splitter has zero visibility across page boundaries. This caused words to be silently sliced in half at page transitions (e.g. "conditions" → "con-" / "ditions") with no overlap stitching them back together, regardless of the overlap value.
+2. **Page-independent splitting.** `PyPDFLoader` returns one `Document` per page, and `split_documents()` processes each page separately meaning the splitter has zero visibility across page boundaries. This caused words to be silently sliced in half at page transitions (e.g. "conditions" → "con-" / "ditions") with no overlap stitching them back together, regardless of the overlap value.
 
 **Fix:** merge all pages into a single string before splitting (preserving page metadata via character-offset tracking), so overlap works correctly across what used to be page boundaries. Verified with controlled before/after tests isolating each root cause independently.
 
@@ -64,22 +64,22 @@ While building a retrieval evaluation set, I noticed something odd inspecting ra
 
 Built a 15-question ground-truth eval set (chunk-ID level, not just answer-level) against a technical PDF, covering direct lookups, multi-location synthesis questions, and deliberately out-of-scope questions to test hallucination resistance.
 
-**Results (k=5):**
-- Hit-rate@5: 0.91
-- Recall@5: 0.76
-- Precision@5: 0.27 (expected - ground truth often has 1-2 correct chunks per question against k=5 retrieved, naturally diluting precision; recall-protective wide retrieval is a deliberate tradeoff)
+**Results (k=3):**
+- Hit-rate@5: 0.82
+- Recall@5: 0.59
+- Precision@5: 0.36 (expected - ground truth often has 1-2 correct chunks per question against k=5 retrieved, naturally diluting precision; recall-protective wide retrieval is a deliberate tradeoff)
 
 
 ## Known Limitations
 
-- **Compound questions dilute retrieval.** A single query asking multiple unrelated things (e.g. "what's this about, who's the author, what metrics were used") gets embedded as one averaged vector, which can underperform on any single sub-question compared to asking it in isolation. Query decomposition (splitting into sub-queries) would address this — not yet implemented.
+- **Compound questions dilute retrieval.** A single query asking multiple unrelated things (e.g. "what's this about, who's the author, what metrics were used") gets embedded as one averaged vector, which can underperform on any single sub-question compared to asking it in isolation. Query decomposition (splitting into sub-queries) would address this - not yet implemented.
 - **Summary-mode keyword trigger is imprecise.** Broad-summarization detection currently matches loosely on phrases like "what is this," which can misfire on compound factual questions that happen to contain that phrase, causing the summarization prompt (which deliberately omits fine detail) to fire when a detailed answer was actually wanted.
 
 ## Future Improvements
 
-- **Query decomposition** — break compound multi-part questions into sub-queries, retrieve for each separately, then synthesize.
-- **Confidence-aware regeneration** — detect low-confidence answers and automatically retry with adjusted retrieval parameters.
-- **Cloud vector DB** — migrate from local FAISS to a hosted vector database (Pinecone or Qdrant) for scalability beyond a single machine.
+- **Query decomposition** - break compound multi-part questions into sub-queries, retrieve for each separately, then synthesize.
+- **Confidence-aware regeneration** - detect low-confidence answers and automatically retry with adjusted retrieval parameters.
+- **Cloud vector DB** - migrate from local FAISS to a hosted vector database (Pinecone or Qdrant) for scalability beyond a single machine.
 
 ## What I Learned
 
