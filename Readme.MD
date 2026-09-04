@@ -23,10 +23,10 @@ Built as a hands-on project to learn RAG architecture from the ground up — not
 ## How It Works
 
 1. **Ingestion** — user uploads a PDF; it's parsed page by page.
-2. **Chunking** — document is split into ~500-character chunks with 50-character overlap, so context isn't lost at chunk boundaries.
+2. **Chunking** — pages are merged into one continuous string before splitting (not split page-by-page), so chunk overlap works correctly even across page boundaries. Split into ~500-character chunks with 150-character overlap. Each chunk retains metadata on which page(s) it spans.
 3. **Embedding** — each chunk is converted into a vector via Gemini's embedding model, batched (40 chunks/batch with delay) to respect free-tier rate limits.
 4. **Storage** — vectors are stored in a local FAISS index.
-5. **Retrieval** — user's query is embedded and compared against all chunk vectors; top-k most similar chunks are retrieved (k adapts: 3 for specific questions, 10 for broad "summarize" requests).
+5. **Retrieval** — user's query is embedded and compared against all chunk vectors. A wide first pass (top-20) is retrieved cheaply via bi-encoder similarity, then a cross-encoder re-ranker (`ms-marco-MiniLM-L6-v2`) re-scores each (query, chunk) pair directly for higher precision. Final top-k (3 for specific questions, 10 for broad "summarize" requests) is kept after re-ranking.
 6. **Generation** — retrieved chunks are inserted into a prompt alongside the query, and Gemini generates an answer grounded in that context, with source chunks shown for transparency.
 
 ## Setup
@@ -55,14 +55,36 @@ streamlit run app.py
 - **Model deprecation:** handled multiple mid-development API/model name changes (embedding model, chat model) by reading error messages and updating to current model identifiers.
 - **Query-type-aware retrieval:** broad "summarize" queries need more context than specific fact-lookup queries — implemented adaptive `k` and a separate summarization prompt to handle this distinction.
 
+## Debugging a Silent Chunking Bug
+
+While building a retrieval evaluation set, I noticed something odd inspecting raw chunk boundaries: consecutive chunks showed **zero character overlap** despite `chunk_overlap=50` being set. Investigation traced this to two compounding issues:
+
+1. **Overlap value too small relative to the text's natural split units.** `RecursiveCharacterTextSplitter` carries overlap back along natural boundaries (line/sentence), not raw characters. With overlap set to 50 and typical line lengths of 90–140 characters in this PDF, the splitter had no room to carry back a full unit — resulting in effectively zero overlap everywhere. Fixed by raising overlap to 150.
+
+2. **Page-independent splitting.** `PyPDFLoader` returns one `Document` per page, and `split_documents()` processes each page separately — meaning the splitter has zero visibility across page boundaries. This caused words to be silently sliced in half at page transitions (e.g. "conditions" → "con-" / "ditions") with no overlap stitching them back together, regardless of the overlap value.
+
+**Fix:** merge all pages into a single string before splitting (preserving page metadata via character-offset tracking), so overlap works correctly across what used to be page boundaries. Verified with controlled before/after tests isolating each root cause independently.
+
+## Retrieval Evaluation
+
+Built a 15-question ground-truth eval set (chunk-ID level, not just answer-level) against a technical PDF, covering direct lookups, multi-location synthesis questions, and deliberately out-of-scope questions to test hallucination resistance.
+
+**Results (k=5):**
+- Hit-rate@5: 0.91
+- Recall@5: 0.76
+- Precision@5: 0.27 (expected — ground truth often has 1-2 correct chunks per question against k=5 retrieved, naturally diluting precision; recall-protective wide retrieval is a deliberate tradeoff)
+
+One ambiguous case surfaced during eval: a "what are the four moment terms" question retrieved a legitimate alternate explanation (the paper's formal moment-definition section) that wasn't in the original ground truth — a useful reminder that ground truth for multi-location answers needs care, not just keyword matching.
+
+## Known Limitations
+
+- **Compound questions dilute retrieval.** A single query asking multiple unrelated things (e.g. "what's this about, who's the author, what metrics were used") gets embedded as one averaged vector, which can underperform on any single sub-question compared to asking it in isolation. Query decomposition (splitting into sub-queries) would address this — not yet implemented.
+- **Summary-mode keyword trigger is imprecise.** Broad-summarization detection currently matches loosely on phrases like "what is this," which can misfire on compound factual questions that happen to contain that phrase, causing the summarization prompt (which deliberately omits fine detail) to fire when a detailed answer was actually wanted.
+
 ## Future Improvements
 
-This is a working first version, not a finished production system. Concrete next steps I'm aware of and plan to explore:
-
-- **Re-ranking** — add a second-stage re-ranker to reorder retrieved chunks by relevance before passing to the LLM, rather than relying purely on raw similarity search.
-- **Retrieval evaluation** — build a formal way to measure retrieval quality (e.g. precision@k against a test set of Q&A pairs) instead of manual spot-checking.
+- **Query decomposition** — break compound multi-part questions into sub-queries, retrieve for each separately, then synthesize.
 - **Confidence-aware regeneration** — detect low-confidence answers and automatically retry with adjusted retrieval parameters.
-- **Context summarization** — summarize retrieved chunks before feeding to the LLM for very broad queries, reducing noise in the context window.
 - **Cloud vector DB** — migrate from local FAISS to a hosted vector database (Pinecone or Qdrant) for scalability beyond a single machine.
 
 ## What I Learned
