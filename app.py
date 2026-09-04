@@ -3,6 +3,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGener
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sentence_transformers import CrossEncoder
 from dotenv import load_dotenv
 import tempfile
 import os
@@ -70,8 +71,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎓 RAG Document Q&A")
-st.write("Upload a PDF, then ask questions about it — answers are grounded in the document, not guesses.")
+st.title("RAG Document Q&A")
+st.write("Upload a PDF, then ask questions about it - answers are grounded in the document, not guesses.")
 
 # ---- Embedding + LLM setup ----
 @st.cache_resource
@@ -80,10 +81,15 @@ def get_embeddings():
 
 @st.cache_resource
 def get_llm():
-    return ChatGoogleGenerativeAI(model="gemini-3.6-flash")
+    return ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite")
+
+@st.cache_resource
+def get_reranker():
+    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L6-v2")
 
 embeddings = get_embeddings()
 llm = get_llm()
+reranker = get_reranker()
 
 # ---- PDF upload ----
 uploaded_file = st.file_uploader("Upload a PDF document", type="pdf")
@@ -102,8 +108,27 @@ if uploaded_file is not None and st.session_state.doc_name != uploaded_file.name
         loader = PyPDFLoader(tmp_path)
         documents = loader.load()
 
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-        chunks = splitter.split_documents(documents)
+        from langchain_core.documents import Document
+
+        full_text = ""
+        page_boundaries = []
+        for doc in documents:
+            start = len(full_text)
+            full_text += doc.page_content + "\n"
+            end = len(full_text)
+            page_boundaries.append((start, end, doc.metadata.get("page")))
+
+        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=150)
+        raw_chunks = splitter.split_text(full_text)
+
+        chunks = []
+        search_pos = 0
+        for chunk_text in raw_chunks:
+            chunk_start = full_text.find(chunk_text, max(0, search_pos - 50))
+            chunk_end = chunk_start + len(chunk_text)
+            search_pos = chunk_start + 1
+            pages_touched = sorted({p for (s, e, p) in page_boundaries if chunk_start < e and chunk_end > s})
+            chunks.append(Document(page_content=chunk_text, metadata={"pages": pages_touched}))
 
         # Embed in batches to stay under the free-tier rate limit (100 requests/minute)
         batch_size = 40
@@ -136,27 +161,42 @@ if uploaded_file is not None and st.session_state.doc_name != uploaded_file.name
 # ---- Query ----
 if st.session_state.vector_store is not None:
     query = st.text_input(
-        "Your question (press Enter to ask):",
-        placeholder="e.g. How many credits are needed for an Honors degree?"
+        "Your question:",
+        placeholder="Ask anything about the document — any language works"
     )
 
     if query:
         with st.spinner("Searching document and generating answer..."):
             is_summary_request = any(word in query.lower() for word in ["summarize", "summary", "overview", "what is this"])
-            k = 10 if is_summary_request else 3
+            final_k = 10 if is_summary_request else 3
+            wide_k = 20  # cast a wider net with the cheap bi-encoder first
 
-            results = st.session_state.vector_store.similarity_search(query, k=k)
+            candidates = st.session_state.vector_store.similarity_search(query, k=wide_k)
+
+            # Re-rank: score each (query, chunk) pair directly with the cross-encoder,
+            # then keep only the top final_k by that more accurate score
+            pairs = [[query, doc.page_content] for doc in candidates]
+            scores = reranker.predict(pairs)
+            reranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
+            results = [doc for doc, score in reranked[:wide_k]]
+
             context = "\n\n".join([doc.page_content for doc in results])
 
             if is_summary_request:
                 prompt = f"""You are looking at chunks from a document. Based on the context below, first identify what kind of document this is and who/what it's about (e.g. "This is a resume for [Name]" or "This is a policy document about X"). Then give a concise 3-4 sentence summary of its key contents. Do not list every detail — just the essence.
 
+Respond in the SAME language the question below was asked in.
+
 Context:
 {context}
+
+Question: {query}
 
 Answer:"""
             else:
                 prompt = f"""Answer the question using ONLY the context below. If the answer isn't in the context, say so.
+
+Respond in the SAME language the question was asked in — if the question is in Hindi, Telugu, or any other language, answer in that language, not English.
 
 Context:
 {context}
@@ -176,9 +216,10 @@ Answer:"""
             </div>
             """, unsafe_allow_html=True)
 
-            with st.expander("📄 Show retrieved source chunks"):
-                for i, doc in enumerate(results):
-                    st.markdown(f"**Chunk {i+1}** (page {doc.metadata.get('page', '?')})")
+            with st.expander("📄 Show retrieved source chunks (reranked)"):
+                for i, (doc, score) in enumerate(reranked[:wide_k]):
+                    pages_str = ", ".join(str(p) for p in doc.metadata.get('pages', ['?']))
+                    st.markdown(f"**Chunk {i+1}** (page {pages_str}) — relevance score: `{score:.3f}`")
                     st.text(doc.page_content)
                     st.divider()
 else:
