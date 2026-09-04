@@ -1,20 +1,15 @@
 # RAG Document Q&A Bot
 
-A Retrieval-Augmented Generation (RAG) system that lets you upload any PDF and ask questions about it in plain English — answers are grounded in the actual document content, with source chunks shown for verification.
+A Retrieval-Augmented Generation (RAG) system that lets you upload any PDF and ask questions about it in plain English answers are grounded in the actual document content, with source chunks shown for verification.
 
-Built as a hands-on project to learn RAG architecture from the ground up — not a tutorial copy-paste, every component (chunking, embedding, retrieval, generation) was built and debugged individually.
+Built as a hands-on project to learn RAG architecture from the ground up not a tutorial copy-paste, every component (chunking, embedding, retrieval, generation) was built and debugged individually.
 
-## Demo
-
-
-**Example Q&A** (tested on SRKR's B.Tech R23 Academic Regulations):
-- **Q:** "How many academic years does a student have to complete their B.Tech degree?"
-- **A:** "Based on the provided context, a student has eight academic years from the year of their admission to fulfill all academic requirements for the B.Tech degree..."
 
 ## Tech Stack
 
 - **Orchestration:** LangChain
-- **Embeddings & Generation:** Google Gemini API (`gemini-embedding-001`, `gemini-3.6-flash`)
+- **Embeddings & Generation:** Google Gemini API (`gemini-embedding-001`, `gemini-3.5-flash-lite`)
+- **Cross Encoder(Reranking):**`ms-marco-MiniLM-L6-v2`
 - **Vector Store:** FAISS (local)
 - **PDF Parsing:** PyPDF
 - **Frontend:** Streamlit
@@ -72,9 +67,8 @@ Built a 15-question ground-truth eval set (chunk-ID level, not just answer-level
 **Results (k=5):**
 - Hit-rate@5: 0.91
 - Recall@5: 0.76
-- Precision@5: 0.27 (expected — ground truth often has 1-2 correct chunks per question against k=5 retrieved, naturally diluting precision; recall-protective wide retrieval is a deliberate tradeoff)
+- Precision@5: 0.27 (expected - ground truth often has 1-2 correct chunks per question against k=5 retrieved, naturally diluting precision; recall-protective wide retrieval is a deliberate tradeoff)
 
-One ambiguous case surfaced during eval: a "what are the four moment terms" question retrieved a legitimate alternate explanation (the paper's formal moment-definition section) that wasn't in the original ground truth — a useful reminder that ground truth for multi-location answers needs care, not just keyword matching.
 
 ## Known Limitations
 
